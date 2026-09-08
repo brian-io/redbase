@@ -1,0 +1,15 @@
+# Build
+*.o
+*.a
+*.so
+*.out
+redbase
+pf/pf_test*
+rm/rm_test*
+
+# Personal / editor
+*.pgn
+.idea/
+.vscode/
+.DS_Store
+*~
