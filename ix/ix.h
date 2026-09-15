@@ -1,6 +1,6 @@
 //
-// File:        pf.h
-// Description: Paged File component interface
+// File:        ix.h
+// Description: Indexing component interface
 //
 
 #ifndef IX_H
