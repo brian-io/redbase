@@ -94,7 +94,7 @@ public:
 
     // Page heaer at the start of each data page. Public for ComputePageLayout
     struct RM_PageHdr {
-        int numRecords;  // number of free slots on ths page
+        int numRecords;  // number of occupied records on this page
         PageNum nextFreePage; // page number of the next page with free slots, or(-1)
         PageNum prevFreePage; // page number of the prev page with free slots, or (-1) -> prev page in free list
     };
@@ -127,7 +127,7 @@ private:
     void AddToFreeList(PageNum pageNum);
     bool PageHasFreeSlot(const char *pData) const;
     int  NumSlotsOccupied(const char *pData) const;
-    RC WriteFileHeader();
+   
 
 
     PF_FileHandle pfHandle;         // underlying PF file handle
