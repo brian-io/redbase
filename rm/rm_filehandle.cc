@@ -386,10 +386,90 @@ RC RM_FileHandle::GetPageData(
     return 0;
 }
 
-// Design: Find page -> Find free slot -> Find slot addr ->
+// Design: validate data -> Find page -> Find free slot -> Find slot addr ->
 // copy rec -> set bitmap[slot]=1 -> numRecords++ ->
 // is page full? yes-> rm frm free list, no-> continue
 RC RM_FileHandle::InsertRec(const char *pData, RID &rid ){
+    if (!bOpen){
+        return RM_INVALIDFILE;
+    }
+
+    if (pData == nullptr){
+        return RM_INVALIDRECORD;
+    }
+
+    if (hdr.recordSize){
+        return RM_INVALIDRECORDSIZE;
+    }
+
+    RC rc;
+
+    PageNum pageNum;
+    SlotNum slotNum;
+
+    // find a page with free space, or allocate one.
+    // returned page is pinned therefore must unpin before moving on
+    if ((rc = FindOrAllocatePage(pageNum, ph)) != 0)
+        return rc;
+
+    char *pData;
+
+    if ((rc = GetData(pData)) != 0){
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+    }
+
+    // find free slot
+    if ((rc = FindFreeSlot(pData, slotNum)) != 0){
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+    }
+
+    // locate slot
+    char *pSlotData;
+    if ((rc = GetSlotPtr(pData, slotNum, pSlotData)) != 0){
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+    }
+
+    // Copy record into page
+    memcpy(pSlotData, pData, hdr.recordSize);
+
+    // Mark slot occupied.
+    SetSlotOccupied(pData, slotNum, true);
+
+    RM_PageHdr *pgh = reinterpret_cast<RM_PageHdr*>(pData);
+
+    // Track transition to full.
+    // If the page had [capacity-1] records before insertion,
+    // this insertion makes it full
+
+    bool becomesFull = (pgh->numRecords == numRecordsPerPage - 1);
+    ++pgh->numRecords;
+
+    // Page has changed
+    pfHandle.MarkDirty(pageNum);
+
+    // Build RID while page is still valid
+    rid = RID(pageNum, slotNum);
+
+    // Unpin before modifying the free list
+    if ((rc = pfHandle.UnpinPage(pageNum)) != 0)
+        return rc;
+
+    // Page becomes full. It must no longer be in the free-page list
+    if(becomesFull){
+        RemoveFromFreeList(pageNum);
+    }
+
+    // Persist modified file header when necessary
+    if(bHdrModified){
+        if((rc = WriteHdr()) != 0)
+            return rc;
+    }
+
+    return 0;
+
 
 }
 
@@ -397,6 +477,95 @@ RC RM_FileHandle::InsertRec(const char *pData, RID &rid ){
 // set bitmap[slot]=0 -> numRecords-- ->
 // was page full? yes-> add to freelist, no=>continue
 RC RM_FileHandle::DeleteRec(const RID &rid){
+    if(!bOpen){
+        return RM_INVALIDFILE;
+    }
+    Rc rc;
+    PageNum pageNum;
+    SlotNum slotNum;
+
+    // Validate RID
+    if ((rc = rid.GetPageNum(pageNum)) != 0){
+        return RM_INVALIDRID;
+    }
+
+    if ((rc = rid.GetSlotNum(slotNum)) != 0){
+        return RM_INVALIDRID;
+    }
+
+    if (pageNum < 1 || pageNum > hdr.numPages){
+        return RM_INVALIDRID;
+
+    }
+
+    if (slotNum < 0 || slotNum >= hdr.numRecordsPerPage){
+        return RM_INVALIDRID;
+
+    }
+
+    // Fetch page
+    PF_PageHandle ph;
+
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)) != 0){
+        return rc;
+    }
+
+    char *pData;
+
+    if ((rc = ph.GetData(pData)) != 0){
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+    }
+
+    // Check if slot is occupied
+    if (!IsSlotOccupied(pData, slotNum)){
+        pfHandle.UnpinPage(pageNum);
+        return RM_RECORDNOTFOUND;
+    }
+
+    // Determine whether page was full before deletion
+    // Only a full page needs to be inserted into the freelist
+
+    RM_PageHdr *pgh = reinterpret_cast<RM_PageHdr*>(pData);
+
+    bool wasFull = (pgh->numRecords == hdr.numRecordsPerPage);
+
+    // Clear bitmap bit. This is the deletion of the record
+    // It will be cleared out by PF_Manager**(check this later)
+    SetSlotOccupied(pData, slotNum, false);
+
+    // Update record count
+    if (pgh->numRecords <= 0){
+        pfHandle.UnpinPage(pageNum);
+        return RM_PAGECORRUPT;
+    }
+
+    --pgh->numRecords
+
+    // Mark page dirty
+    pfHandle.MarkDirty(pageNum);
+
+    // Unpin page before manipulating freelist
+    if((rc = pfHandle.UnpinPage(pageNum)) != 0){
+        return rc;
+    }
+
+    // Fule page now has free slot. Add it to the front of
+    // the freelist
+    if (wasFull){
+        AddToFreeList(pageNum);
+    }
+
+    // File header normally doesn't change on deletion unless the 
+    // freelist head has changed
+    if (bHdrModified){
+        if((rc = WriteHdr()) != 0){
+            return rc;
+        }
+    }
+
+    return 0;
+
 
 }
 
