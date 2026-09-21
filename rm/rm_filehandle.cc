@@ -571,11 +571,98 @@ RC RM_FileHandle::DeleteRec(const RID &rid){
 
 
 RC RM_FileHandle::UpdateRec(const RM_Record &rec){
+    if (!bOpen)
+        return RM_INVALIDFILE;
+
+    if (!rec.valid)
+        return RM_INVALIDRECORD;
+
+    if (rec.pData == nullptr)
+        return RM_INVALIDRECORD;
+
+    if (rec.dataSize != hdr.recordSize)
+        return RM_INVALIDRECORD;
+
+
+    PageNum pageNum;
+    SlotNum slotNum;
+
+    RC rc;
+
+    // Get RID from RM_Record
+    if ((rc = rec.rid.GetPageNum(pageNum)) != 0)
+        return RM_INVALIDRID;
+
+    if ((rc = rec.rid.GetSlotNum(slotNum)) != 0)
+        return RM_INVALIDRID;
+    
+
+    // Validate RID
+    if (pageNum < 1 || pageNum > hdr.numPages)
+        return RM_INVALIDRID;
+    
+    if (slotNum < 0 || slotNum >= hdr.numRecordsPerPage)
+        return RM_INVALIDRID;
+
+    // Fetch page
+    PF_PageHandle ph;
+
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)) != 0)
+        return rc;
+
+    char *pPageData;
+
+    if ((rc = GetData(pPageData)) != 0)
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+
+    // Target slot must already contain a record
+    if (!IsSlotOccupied(pPageData, slotNum)) {
+        pfHandle.UnpinPage(pageNum);
+        return RM_RECORDNOTFOUND;
+    }
+
+    // Find the target slot.
+    char *pSlotData;
+
+    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData)) != 0)
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+
+    // Replace existing rec contents
+    // The RID and slot don't change
+
+    memcpy(pSlotData, rec.pData, hdr.recordSize);
+
+    // Mark page dirty and unpin it;
+    pfHandle.MarkDirty(pageNum);
+    pfHandle.UnpinPage(pageNum);
+
+    return 0;
+
 
 }
 
 
 RC RM_FileHandle::ForcePages(PageNum PageNum = ALL_PAGES){
+    if (!bOpen)
+        return RM_INVALIDFILE;
+
+    RC rc;
+
+    // Header is maintained separately from PF dirty pages.
+    // Make sure the cached RM header is written first.
+    if(bHdrModified){
+        if ((rc = WriteHdr()) != 0){
+            return rc;
+        }
+    }
+
+    // Force requested PF pages
+    pfHandle.ForcePages(pageNum);
+
+    return 0;
+
 
 }
 
@@ -604,8 +691,6 @@ RC RM_FileHandle::ReadHdr(){
     bHdrModified = false;
 
     return 0;
-
-
 
 }
 
