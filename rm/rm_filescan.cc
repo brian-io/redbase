@@ -188,20 +188,18 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
                          void *value,
                          ClientHint pinHint = NO_HINT)
 {
-    // Scan cannot be opened twice.
 
+    // Scan cannot be opened twice.
     if (scanOpened)
         return RM_SCANOPEN;
 
 
     // File must be open.
-
     if (!filehandle.IsOpen())
         return RM_INVALIDFILE;
 
 
     // Validate attribute type.
-
     if (attrType != INT &&
         attrType != FLOAT &&
         attrType != STRING)
@@ -215,7 +213,6 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
     // INT and FLOAT must have their natural sizes.
     // STRING may have any positive length that fits in
     // the record.
-
     if (attrLength <= 0)
         return RM_INVALIDATTR;
 
@@ -233,7 +230,6 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
 
 
     // Validate attribute offset.
-
     if (attrOffset < 0)
         return RM_INVALIDATTR;
 
@@ -242,7 +238,6 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
 
 
     // Validate comparison operator.
-
     if (compOp != NO_OP &&
         compOp != EQ_OP &&
         compOp != NE_OP &&
@@ -256,13 +251,11 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
 
 
     // A comparison value is required unless NO_OP is used.
-
     if (compOp != NO_OP && value == nullptr)
         return RM_INVALIDATTR;
 
 
     // Store scan configuration.
-
     this->fileHandle = &filehandle;
     this->attrType = attrType;
     this->attrLength = attrLength;
@@ -282,7 +275,6 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
     // INT and FLOAT are copied directly.
     // STRING requires its own allocation because the scan
     // must continue to own the value after OpenScan() returns.
-
     if (attrType == INT)
     {
         if (value != nullptr)
@@ -330,10 +322,6 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
 
 
     // The scan is now open.
-    //
-    // pinHint is currently unused. The scan uses the existing
-    // RM_FileHandle page-fetch mechanism.
-
     (void)pinHint;
 
     scanOpened = true;
@@ -371,7 +359,6 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
     // Scan all data pages.
     //
     // Page 0 is the RM header page, so data pages start at 1.
-
     while (currentPageNum <= fileHandle->hdr.numPages)
     {
         PF_PageHandle ph;
@@ -387,11 +374,9 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
             return rc;
 
 
-            // Scan every slot on this page.
+        // Scan every slot on this page.
     
-        while (currentSlotNum <
-               fileHandle->hdr.numRecordsPerPage)
-        {
+        while (currentSlotNum < fileHandle->hdr.numRecordsPerPage){
             SlotNum slotNum = currentSlotNum;
 
             // Advance immediately.
@@ -434,7 +419,6 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
             // The supplied RM layout does not define a NULL
             // bitmap, so the attribute is currently treated
             // as non-NULL.
-
             bool satisfies =
                 checkSatisfy(pRecordData, false);
 
@@ -469,7 +453,7 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
         // No more slots on this page.
         //
         // Release the page before moving to the next one.
-    
+
         rc = fileHandle->pfHandle.UnpinPage(
             currentPageNum
         );
