@@ -338,24 +338,24 @@ RC RM_FileHandle::GetRec( const RID &rid, RM_Record &rec) const {
 
     if (( rc = pfHandle.GetThisPage(pageNum, ph))) return rc;
 
-    char *pData;
-    if (( rc = ph.GetData(pData)) != 0){
+    char *pPageData;
+    if (( rc = ph.GetData(pPageData)) != 0){
         pfHandle.UnpinPage(pageNum);
         return rc;
     };
 
-     if (!IsSlotOccupied(pData, slotNum)) {
+     if (!IsSlotOccupied(pPageData, slotNum)) {
         pfHandle.UnpinPage(pageNum);
         return RM_RECORDNOTFOUND;
     }
  
-    char *pSlot;
-    if ((rc = GetSlotPtr(pData, slotNum, pSlot)) != 0) {
+    char *pSlotData;
+    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData)) != 0) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
  
-    rec.Set(pSlot, hdr.recordSize, rid);
+    rec.Set(pSlotData, hdr.recordSize, rid);
 
     pfHandle.UnpinPage(pageNum);
     return 0;
