@@ -138,7 +138,7 @@ RC RM_Manager::OpenFile(const char *fileName, RM_FileHandle &fileHandle){
 */
 RC RM_Manager::CloseFile(RM_FileHandle &fileHandle){
     
-    if(fileHandle.bOpen)
+    if(!fileHandle.bOpen)
         return RM_INVALID_FILEHANDLE;
 
     RC rc;

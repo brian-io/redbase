@@ -8,11 +8,11 @@
 #include "rm.h"
 #include <cstring>
 #include <cstdio>
-
+#include <new>
 
 RM_FileScan::RM_FileScan()
     : fileHandle(nullptr) ,
-      attrType(INT).
+      attrType(INT),
       attrLength(0),
       attrOffset(0),
       compOp(NO_OP),
@@ -273,8 +273,7 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
     // Copy comparison value.
     //
     // INT and FLOAT are copied directly.
-    // STRING requires its own allocation because the scan
-    // must continue to own the value after OpenScan() returns.
+    // STRING requires its own allocation because the scan must continue to own the value after OpenScan() returns.
     if (attrType == INT)
     {
         if (value != nullptr)
@@ -474,7 +473,7 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
 }
 
 
-RC RM_FileScan::Closescan(){
+RC RM_FileScan::CloseScan(){
     if(!scanOpened)
         return RM_INVALIDSCAN;
 

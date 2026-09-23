@@ -398,7 +398,7 @@ RC RM_FileHandle::InsertRec(const char *pData, RID &rid ){
         return RM_INVALIDRECORD;
     }
 
-    if (hdr.recordSize){
+    if (hdr.recordSize <= 0){
         return RM_INVALIDRECORDSIZE;
     }
 
@@ -412,22 +412,22 @@ RC RM_FileHandle::InsertRec(const char *pData, RID &rid ){
     if ((rc = FindOrAllocatePage(pageNum, ph)) != 0)
         return rc;
 
-    char *pData;
+    char *pPageData;
 
-    if ((rc = GetData(pData)) != 0){
+    if ((rc = GetData(pPageData)) != 0){
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
     // find free slot
-    if ((rc = FindFreeSlot(pData, slotNum)) != 0){
+    if ((rc = FindFreeSlot(pPageData, slotNum)) != 0){
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
     // locate slot
     char *pSlotData;
-    if ((rc = GetSlotPtr(pData, slotNum, pSlotData)) != 0){
+    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData)) != 0){
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
@@ -480,7 +480,7 @@ RC RM_FileHandle::DeleteRec(const RID &rid){
     if(!bOpen){
         return RM_INVALIDFILE;
     }
-    Rc rc;
+    RC rc;
     PageNum pageNum;
     SlotNum slotNum;
 
