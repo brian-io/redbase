@@ -1,0 +1,8 @@
+*.o
+*.dat
+*.idx
+*.log
+*.out
+*.txt
+build/
+.vscode/
