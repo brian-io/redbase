@@ -23,8 +23,8 @@ typedef int PageNum;
 typedef int SlotNum;
 
 
-// RId return codes
-#define RM_RID_INVALID                             // RID is not valid (not yet set)
+// RID return codes
+#define RM_INVALIDRID      2                       // RID is not valid (not yet set)
 
 //
 // RID: Record id interface
@@ -33,7 +33,12 @@ class RID {
 public:
     RID();                                         // Default constructor
     ~RID();                                        // Destructor
+
     RID(PageNum pageNum, SlotNum slotNum);         // Construct from page+slot
+
+    RID(const RID& rid);                           // Copy constructor
+
+    RID& operator=(const RID& rid);
 
     RC GetPageNum(PageNum &pageNum) const;         // Return page number
     RC GetSlotNum(SlotNum &slotNum) const;         // Return slot number

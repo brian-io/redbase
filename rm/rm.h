@@ -123,7 +123,7 @@ private:
     void SetSlotOccupied(char *pData, SlotNum slotNum, bool occupied);
     RC FindFreeSlot(char *pData, SlotNum &slotNum) const;
     RC FindOrAllocatePage(PageNum &pageNum, PF_PageHandle &ph);
-    void RemoveFromFreeList(PageNum pageNum);
+    RC RemoveFromFreeList(PageNum pageNum);
     void AddToFreeList(PageNum pageNum);
     bool PageHasFreeSlot(const char *pData) const;
     int  NumSlotsOccupied(const char *pData) const;
@@ -196,8 +196,12 @@ class RM_Manager {
 
         RC CloseFile  (RM_FileHandle &fileHandle);
 
-
     private:
+        static void ComputePageLayout(int recordSize,
+                                  int &numRecordsPerPage,
+                                  int &bitmapSize,
+                                  int &pageDataOffset);
+
         PF_Manager &pfm; // reference to underlying program's PF_Manager
 
 };

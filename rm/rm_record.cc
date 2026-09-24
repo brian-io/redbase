@@ -25,7 +25,7 @@ RM_Record::~RM_Record(){
 // Set pData to point to the record's contents.
 // provides access to the contents(data) of the record
 RC RM_Record::GetData(char *&pData) const{
-    if (!valid || this-<pData == nullptr)
+    if (!valid || this->pData == nullptr)
         return RM_INVALIDRECORD;
 
     pData = this->pData;
@@ -48,7 +48,7 @@ void RM_Record::Set(const char *pData, int size, const RID &rid){
 
     this->pData = nullptr;
     this->dataSize = 0;
-    this->pData = false;
+    this->valid = false;
 
     if (pData == nullptr || size <= 0){
         return;

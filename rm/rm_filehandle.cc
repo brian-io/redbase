@@ -62,7 +62,7 @@ bool RM_FileHandle::IsSlotOccupied( const char *pData, SlotNum SlotNum) const {
     const unsigned char *bm = reinterpret_cast<const unsigned char*>(
         pData + sizeof(RM_PageHdr));
 
-    return (bm[SlotNum / 8] & (1u << (SlotNum % 8))) != 0;
+    return (bm[SlotNum / 8] & (1u << (SlotNum % 8))) ;
 
 }
 
@@ -70,7 +70,7 @@ bool RM_FileHandle::IsSlotOccupied( const char *pData, SlotNum SlotNum) const {
 void RM_FileHandle::SetSlotOccupied(char *pData, SlotNum slotNum, bool occupied)  {
      
     if (slotNum < 0 || slotNum >= hdr.numRecordsPerPage)
-        return RM_INVALIDRID;
+        return ;
 
     unsigned char *bm = reinterpret_cast<unsigned char *>(
         pData + sizeof(RM_PageHdr)
@@ -144,104 +144,224 @@ bool RM_FileHandle::PageHasFreeSlot(const char *pData) const {
 
 // Remove a page from the free-page doubly-linked list
 RC RM_FileHandle::RemoveFromFreeList(PageNum pageNum) {
+    if (!bOpen)
+        return RM_INVALIDFILE;
+    
+
+    if (pageNum < 1 || pageNum > hdr.numPages)
+        return RM_INVALIDRID;
+
     RC rc;
+
     // Read the page header
     PF_PageHandle ph;
-    if (pfHandle.GetThisPage(pageNum, ph) != 0) return rc;
+    if ((rc = pfHandle.GetThisPage(pageNum, ph))) return rc;
 
     char *pData;
-    ph.GetData(pData);
+    if ((rc = ph.GetData(pData))) {
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+    }
 
     RM_PageHdr *pgh = reinterpret_cast<RM_PageHdr*>(pData);
 
     PageNum prev = pgh->prevFreePage;
     PageNum next = pgh->nextFreePage;
 
-    pgh->prevFreePage = -1;
-    pgh->nextFreePage = -1;
+    /*
+     * A page being removed must either:
+     *
+     *   1. be the free-list head, or
+     *   2. have a valid previous free page.
+     *
+     * If neither is true, the list metadata is inconsistent.
+     */
+    if (prev == -1 && hdr.firstFreePage != pageNum) {
+        pfHandle.UnpinPage(pageNum);
+        return RM_PAGECORRUPT;
+    }
 
-    pfHandle.MarkDirty(pageNum);
-    pfHandle.UnpinPage(pageNum);
-
-    // Update prev's next
+    /*
+     * Update the previous page.
+     */
     if (prev != -1) {
         PF_PageHandle prevPH;
-        char *prevData;
-        if(pfHandle.GetThisPage(prev, prevPH) == 0) {
-           prevPH.GetData(prevData);
-            reinterpret_cast<RM_PageHdr*>(prevData)->nextFreePage = next;
-            pfHandle.MarkDirty(prev);
-            pfHandle.UnpinPage(prev);
+
+        if ((rc = pfHandle.GetThisPage(prev, prevPH))) {
+            pfHandle.UnpinPage(pageNum);
+            return rc;
         }
-    } else {
-        // pageNum was the head
+
+        char *prevData = nullptr;
+
+        if ((rc = prevPH.GetData(prevData))) {
+            pfHandle.UnpinPage(prev);
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+        }
+
+        RM_PageHdr *prevHdr =
+            reinterpret_cast<RM_PageHdr *>(prevData);
+
+        prevHdr->nextFreePage = next;
+
+        if ((rc = pfHandle.MarkDirty(prev))) {
+            pfHandle.UnpinPage(prev);
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+        }
+
+        if ((rc = pfHandle.UnpinPage(prev))) {
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+        }
+    }
+    else {
+        /*
+         * pageNum was the head of the free list.
+         */
         hdr.firstFreePage = next;
         bHdrModified = true;
     }
- 
-    // Update next's prev
+
+    /*
+     * Update the next page.
+     */
     if (next != -1) {
         PF_PageHandle nextPH;
-        char *nextData;
-        if (pfHandle.GetThisPage(next, nextPH) == 0) {
-            if (nextPH.GetData(nextData) == 0) {
 
-                RM_PageHdr *nextHdr =
-                    reinterpret_cast<RM_PageHdr *>(nextData);
+        if ((rc = pfHandle.GetThisPage(next, nextPH))) {
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+        }
 
-                nextHdr->prevFreePage = prev;
+        char *nextData = nullptr;
 
-                pfHandle.MarkDirty(next);
-            }
+        if ((rc = nextPH.GetData(nextData))) {
             pfHandle.UnpinPage(next);
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+        }
+
+        RM_PageHdr *nextHdr =
+            reinterpret_cast<RM_PageHdr *>(nextData);
+
+        nextHdr->prevFreePage = prev;
+
+        if ((rc = pfHandle.MarkDirty(next))) {
+            pfHandle.UnpinPage(next);
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+        }
+
+        if ((rc = pfHandle.UnpinPage(next))) {
+            pfHandle.UnpinPage(pageNum);
+            return rc;
         }
     }
+
+    /*
+     * Disconnect the page itself from the list.
+     */
+    pgh->prevFreePage = -1;
+    pgh->nextFreePage = -1;
+
+    
+    if ((rc = pfHandle.MarkDirty(pageNum))) {
+            pfHandle.UnpinPage(pageNum);
+            return rc;
+    }
+
+    if ((rc = pfHandle.UnpinPage(pageNum)))
+        return rc;
+
 
     return 0;
 }
 
 // Insert a page at the front of the free-page list
-void RM_FileHandle::AddToFreeList(PageNum pageNum) {
-  
+void RM_FileHandle::AddToFreeList(PageNum pageNum)
+{
+    if (!bOpen)
+        return;
+
+    if (pageNum < 1 || pageNum > hdr.numPages)
+        return;
+
+    RC rc;
+
     PF_PageHandle ph;
 
-    if (pfHandle.GetThisPage(pageNum, ph) != 0) return;
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)))
+        return;
 
-    char *pData;
+    char *pData = nullptr;
 
-    if (ph.GetData(pData) != 0) {
+    if ((rc = ph.GetData(pData))) {
         pfHandle.UnpinPage(pageNum);
         return;
     }
 
-    RM_PageHdr *pgh = reinterpret_cast<RM_PageHdr*>(pData);
- 
+    RM_PageHdr *pageHdr =
+        reinterpret_cast<RM_PageHdr *>(pData);
+
     PageNum oldHead = hdr.firstFreePage;
 
-    pgh->nextFreePage = oldHead;
-    pgh->prevFreePage = -1;
+    /*
+     * Insert page at the front of the free list.
+     *
+     *       old list:
+     *
+     *       HEAD -> A <-> B
+     *
+     *       becomes:
+     *
+     *       HEAD -> pageNum <-> A <-> B
+     */
+    pageHdr->prevFreePage = -1;
+    pageHdr->nextFreePage = oldHead;
 
-    pfHandle.MarkDirty(pageNum);
-    pfHandle.UnpinPage(pageNum);
- 
-    // Update old head's prevFreePage
+    if ((rc = pfHandle.MarkDirty(pageNum))) {
+        pfHandle.UnpinPage(pageNum);
+        return;
+    }
+
+    if ((rc = pfHandle.UnpinPage(pageNum)))
+        return;
+
+    /*
+     * Update the old head's previous pointer.
+     */
     if (oldHead != -1) {
         PF_PageHandle headPH;
-        char *headData;
-        if (pfHandle.GetThisPage(oldHead, headPH) == 0) {
-            if (headPH.GetData(headData) == 0) {
 
-                RM_PageHdr *headHdr =
-                    reinterpret_cast<RM_PageHdr *>(headData);
+        if ((rc = pfHandle.GetThisPage(oldHead, headPH)))
+            return;
 
-                headHdr->prevFreePage = pageNum;
+        char *headData = nullptr;
 
-                pfHandle.MarkDirty(oldHead);
-            }
+        if ((rc = headPH.GetData(headData))) {
             pfHandle.UnpinPage(oldHead);
+            return;
         }
+
+        RM_PageHdr *headHdr =
+            reinterpret_cast<RM_PageHdr *>(headData);
+
+        headHdr->prevFreePage = pageNum;
+
+        if ((rc = pfHandle.MarkDirty(oldHead))) {
+            pfHandle.UnpinPage(oldHead);
+            return;
+        }
+
+        if ((rc = pfHandle.UnpinPage(oldHead)))
+            return;
     }
- 
+
+    /*
+     * Finally update the cached RM file header.
+     */
     hdr.firstFreePage = pageNum;
     bHdrModified = true;
 }
@@ -263,11 +383,11 @@ RC RM_FileHandle::FindOrAllocatePage(PageNum &pageNum, PF_PageHandle &ph) {
     }
  
     // No free page — allocate a new data page
-    if ((rc = pfHandle.AllocatePage(ph)) != 0) return rc;
+    if ((rc = pfHandle.AllocatePage(ph)) ) return rc;
 
     char *pData;
 
-    if ((rc = ph.GetData(pData)) != 0) {
+    if ((rc = ph.GetData(pData)) ) {
         PageNum allocatedPage;
 
         if (ph.GetPageNum(allocatedPage) == 0)
@@ -276,7 +396,7 @@ RC RM_FileHandle::FindOrAllocatePage(PageNum &pageNum, PF_PageHandle &ph) {
         return rc;
     }
 
-    if ((rc = ph.GetPageNum(pageNum)) != 0) {
+    if ((rc = ph.GetPageNum(pageNum)) ) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
@@ -295,7 +415,7 @@ RC RM_FileHandle::FindOrAllocatePage(PageNum &pageNum, PF_PageHandle &ph) {
     pfHandle.MarkDirty(pageNum);
     
     // file header value changes
-    hdr.numPages++;
+    hdr.numPages = pageNum;
     bHdrModified = true;
  
     // Keep pinned for caller; 
@@ -306,7 +426,7 @@ RC RM_FileHandle::FindOrAllocatePage(PageNum &pageNum, PF_PageHandle &ph) {
  
     // Add new page to free list then re-pin for the caller
     AddToFreeList(pageNum);
-    if ((rc = pfHandle.GetThisPage(pageNum, ph)) != 0) return rc;
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)) ) return rc;
  
     return 0;
 }
@@ -325,8 +445,8 @@ RC RM_FileHandle::GetRec( const RID &rid, RM_Record &rec) const {
     PageNum pageNum;
     SlotNum slotNum;
 
-    if ((rc = rid.GetPageNum(pageNum)) != 0) return RM_INVALIDRID;
-    if ((rc = rid.GetSlotNum(slotNum)) != 0) return RM_INVALIDRID;
+    if ((rc = rid.GetPageNum(pageNum)) ) return RM_INVALIDRID;
+    if ((rc = rid.GetSlotNum(slotNum)) ) return RM_INVALIDRID;
 
     // page 0 is the header page; data pages start at 1
     if (pageNum < 1 || pageNum > hdr.numPages) return RM_INVALIDRID;
@@ -336,11 +456,11 @@ RC RM_FileHandle::GetRec( const RID &rid, RM_Record &rec) const {
 
     PF_PageHandle ph;
 
-    if (( rc = pfHandle.GetThisPage(pageNum, ph))) return rc;
+    if ((rc = pfHandle.GetThisPage(pageNum, ph))) return rc;
 
     char *pPageData;
-    if (( rc = ph.GetData(pPageData)) != 0){
-        pfHandle.UnpinPage(pageNum);
+    if (( rc = ph.GetData(pPageData))){
+        // pfHandle.UnpinPage(pageNum);
         return rc;
     };
 
@@ -350,14 +470,16 @@ RC RM_FileHandle::GetRec( const RID &rid, RM_Record &rec) const {
     }
  
     char *pSlotData;
-    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData)) != 0) {
+    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData))) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
  
     rec.Set(pSlotData, hdr.recordSize, rid);
 
-    pfHandle.UnpinPage(pageNum);
+    if ((rc = pfHandle.UnpinPage(pageNum)))
+        return rc;
+
     return 0;
 }
 
@@ -375,10 +497,10 @@ RC RM_FileHandle::GetPageData(
 
     RC rc;
 
-    if ((rc = pfHandle.GetThisPage(pageNum, ph)) != 0)
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)) )
         return rc;
 
-    if ((rc = ph.GetData(pData)) != 0) {
+    if ((rc = ph.GetData(pData)) ) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
@@ -389,184 +511,281 @@ RC RM_FileHandle::GetPageData(
 // Design: validate data -> Find page -> Find free slot -> Find slot addr ->
 // copy rec -> set bitmap[slot]=1 -> numRecords++ ->
 // is page full? yes-> rm frm free list, no-> continue
-RC RM_FileHandle::InsertRec(const char *pData, RID &rid ){
-    if (!bOpen){
+RC RM_FileHandle::InsertRec(const char *pData, RID &rid)
+{
+    if (!bOpen)
         return RM_INVALIDFILE;
-    }
 
-    if (pData == nullptr){
+    if (pData == nullptr)
         return RM_INVALIDRECORD;
-    }
 
-    if (hdr.recordSize <= 0){
+    if (hdr.recordSize <= 0)
         return RM_INVALIDRECORDSIZE;
-    }
+
+    if (hdr.numRecordsPerPage <= 0)
+        return RM_PAGECORRUPT;
 
     RC rc;
 
     PageNum pageNum;
     SlotNum slotNum;
 
-    // find a page with free space, or allocate one.
-    // returned page is pinned therefore must unpin before moving on
-    if ((rc = FindOrAllocatePage(pageNum, ph)) != 0)
+    PF_PageHandle ph;
+
+    /*
+     * Find an existing page with free space or allocate a new one.
+     *
+     * FindOrAllocatePage() returns the page pinned.
+     */
+    if ((rc = FindOrAllocatePage(pageNum, ph)))
         return rc;
 
-    char *pPageData;
+    /*
+     * Get the actual data buffer belonging to the PF page.
+     *
+     * IMPORTANT:
+     *
+     * pData is the caller's record.
+     * pPageData is the RM page.
+     */
+    char *pPageData = nullptr;
 
-    if ((rc = GetData(pPageData)) != 0){
+    if ((rc = ph.GetData(pPageData))) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
-    // find free slot
-    if ((rc = FindFreeSlot(pPageData, slotNum)) != 0){
+    /*
+     * Find an unused slot.
+     */
+    if ((rc = FindFreeSlot(pPageData, slotNum))) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
-    // locate slot
-    char *pSlotData;
-    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData)) != 0){
+    /*
+     * Find the physical address of the slot.
+     */
+    char *pSlotData = nullptr;
+
+    if ((rc = GetSlotPtr(
+        pPageData,
+        slotNum,
+        pSlotData
+    ))) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
-    // Copy record into page
-    memcpy(pSlotData, pData, hdr.recordSize);
+    /*
+     * Get the page header.
+     */
+    RM_PageHdr *pageHdr =
+        reinterpret_cast<RM_PageHdr *>(pPageData);
 
-    // Mark slot occupied.
-    SetSlotOccupied(pData, slotNum, true);
+    /*
+     * The page should have at least one free slot because
+     * FindFreeSlot() succeeded.
+     *
+     * Determine whether this insertion will make the page full.
+     */
+    bool becomesFull =
+        (pageHdr->numRecords ==
+         hdr.numRecordsPerPage - 1);
 
-    RM_PageHdr *pgh = reinterpret_cast<RM_PageHdr*>(pData);
+    /*
+     * Copy the caller's record into the page slot.
+     */
+    std::memcpy(
+        pSlotData,
+        pData,
+        hdr.recordSize
+    );
 
-    // Track transition to full.
-    // If the page had [capacity-1] records before insertion,
-    // this insertion makes it full
+    /*
+     * Mark the slot occupied.
+     */
+    SetSlotOccupied(
+        pPageData,
+        slotNum,
+        true
+    );
 
-    bool becomesFull = (pgh->numRecords == numRecordsPerPage - 1);
-    ++pgh->numRecords;
+    /*
+     * Update page record count.
+     */
+    ++pageHdr->numRecords;
 
-    // Page has changed
-    pfHandle.MarkDirty(pageNum);
+    /*
+     * The page has changed.
+     */
+    if ((rc = pfHandle.MarkDirty(pageNum))) {
+        pfHandle.UnpinPage(pageNum);
+        return rc;
+    }
 
-    // Build RID while page is still valid
+    /*
+     * Construct the RID for the newly inserted record.
+     */
     rid = RID(pageNum, slotNum);
 
-    // Unpin before modifying the free list
-    if ((rc = pfHandle.UnpinPage(pageNum)) != 0)
+    /*
+     * We are finished modifying the page.
+     */
+    if ((rc = pfHandle.UnpinPage(pageNum)))
         return rc;
 
-    // Page becomes full. It must no longer be in the free-page list
-    if(becomesFull){
+    /*
+     * If this insertion consumed the last free slot,
+     * the page must leave the free-page list.
+     */
+    if (becomesFull) {
         RemoveFromFreeList(pageNum);
     }
 
-    // Persist modified file header when necessary
-    if(bHdrModified){
-        if((rc = WriteHdr()) != 0)
+    /*
+     * RemoveFromFreeList() may have modified the RM header.
+     * FindOrAllocatePage()/AddToFreeList() may also have done so.
+     */
+    if (bHdrModified) {
+        if ((rc = WriteHdr()))
             return rc;
     }
 
     return 0;
-
-
 }
 
 // Validate Rid -> get page -> check bitmap ->
 // set bitmap[slot]=0 -> numRecords-- ->
 // was page full? yes-> add to freelist, no=>continue
-RC RM_FileHandle::DeleteRec(const RID &rid){
-    if(!bOpen){
+RC RM_FileHandle::DeleteRec(const RID &rid)
+{
+    if (!bOpen)
         return RM_INVALIDFILE;
-    }
+
     RC rc;
+
     PageNum pageNum;
     SlotNum slotNum;
 
-    // Validate RID
-    if ((rc = rid.GetPageNum(pageNum)) != 0){
-        return RM_INVALIDRID;
-    }
-
-    if ((rc = rid.GetSlotNum(slotNum)) != 0){
-        return RM_INVALIDRID;
-    }
-
-    if (pageNum < 1 || pageNum > hdr.numPages){
+    /*
+     * Extract RID components.
+     */
+    if ((rc = rid.GetPageNum(pageNum)))
         return RM_INVALIDRID;
 
-    }
-
-    if (slotNum < 0 || slotNum >= hdr.numRecordsPerPage){
+    if ((rc = rid.GetSlotNum(slotNum)))
         return RM_INVALIDRID;
 
-    }
+    /*
+     * Validate page.
+     *
+     * Page 0 is the RM file header.
+     */
+    if (pageNum < 1 || pageNum > hdr.numPages)
+        return RM_INVALIDRID;
 
-    // Fetch page
+    /*
+     * Validate slot.
+     */
+    if (slotNum < 0 ||
+        slotNum >= hdr.numRecordsPerPage)
+        return RM_INVALIDRID;
+
+    /*
+     * Fetch the data page.
+     */
     PF_PageHandle ph;
 
-    if ((rc = pfHandle.GetThisPage(pageNum, ph)) != 0){
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)))
         return rc;
-    }
 
-    char *pData;
+    char *pPageData = nullptr;
 
-    if ((rc = ph.GetData(pData)) != 0){
+    if ((rc = ph.GetData(pPageData))) {
         pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
-    // Check if slot is occupied
-    if (!IsSlotOccupied(pData, slotNum)){
+    /*
+     * Verify that the slot actually contains a record.
+     */
+    if (!IsSlotOccupied(pPageData, slotNum)) {
         pfHandle.UnpinPage(pageNum);
         return RM_RECORDNOTFOUND;
     }
 
-    // Determine whether page was full before deletion
-    // Only a full page needs to be inserted into the freelist
+    RM_PageHdr *pageHdr =
+        reinterpret_cast<RM_PageHdr *>(pPageData);
 
-    RM_PageHdr *pgh = reinterpret_cast<RM_PageHdr*>(pData);
+    /*
+     * IMPORTANT:
+     *
+     * Determine whether the page was FULL before deletion.
+     *
+     * A page that was already partially free is already on the
+     * free list, so it must NOT be inserted again.
+     */
+    bool wasFull =
+        (pageHdr->numRecords ==
+         hdr.numRecordsPerPage);
 
-    bool wasFull = (pgh->numRecords == hdr.numRecordsPerPage);
+    /*
+     * Clear the bitmap bit.
+     *
+     * Bit = 0 means the slot is now free.
+     */
+    SetSlotOccupied(
+        pPageData,
+        slotNum,
+        false
+    );
 
-    // Clear bitmap bit. This is the deletion of the record
-    // It will be cleared out by PF_Manager**(check this later)
-    SetSlotOccupied(pData, slotNum, false);
-
-    // Update record count
-    if (pgh->numRecords <= 0){
+    /*
+     * The page header should never claim that a page has
+     * zero records before this deletion.
+     */
+    if (pageHdr->numRecords <= 0) {
         pfHandle.UnpinPage(pageNum);
         return RM_PAGECORRUPT;
     }
 
-    --pgh->numRecords
+    --pageHdr->numRecords;
 
-    // Mark page dirty
-    pfHandle.MarkDirty(pageNum);
-
-    // Unpin page before manipulating freelist
-    if((rc = pfHandle.UnpinPage(pageNum)) != 0){
+    /*
+     * Mark the data page dirty.
+     */
+    if ((rc = pfHandle.MarkDirty(pageNum))) {
+        pfHandle.UnpinPage(pageNum);
         return rc;
     }
 
-    // Fule page now has free slot. Add it to the front of
-    // the freelist
-    if (wasFull){
-        AddToFreeList(pageNum);
-    }
+    /*
+     * We are finished modifying the page.
+     */
+    if ((rc = pfHandle.UnpinPage(pageNum)))
+        return rc;
 
-    // File header normally doesn't change on deletion unless the 
-    // freelist head has changed
-    if (bHdrModified){
-        if((rc = WriteHdr()) != 0){
-            return rc;
+    /*
+     * Only a FULL -> FREE transition requires modifying
+     * the free-page list.
+     *
+     * If the page was already partially free, it is already
+     * somewhere in the free list.
+     */
+    if (wasFull) {
+        AddToFreeList(pageNum);
+
+        /*
+         * AddToFreeList() updates the cached RM file header.
+         */
+        if (bHdrModified) {
+            if ((rc = WriteHdr()))
+                return rc;
         }
     }
 
     return 0;
-
-
 }
 
 
@@ -590,10 +809,10 @@ RC RM_FileHandle::UpdateRec(const RM_Record &rec){
     RC rc;
 
     // Get RID from RM_Record
-    if ((rc = rec.rid.GetPageNum(pageNum)) != 0)
+    if ((rc = rec.rid.GetPageNum(pageNum)) )
         return RM_INVALIDRID;
 
-    if ((rc = rec.rid.GetSlotNum(slotNum)) != 0)
+    if ((rc = rec.rid.GetSlotNum(slotNum)) )
         return RM_INVALIDRID;
     
 
@@ -607,14 +826,15 @@ RC RM_FileHandle::UpdateRec(const RM_Record &rec){
     // Fetch page
     PF_PageHandle ph;
 
-    if ((rc = pfHandle.GetThisPage(pageNum, ph)) != 0)
+    if ((rc = pfHandle.GetThisPage(pageNum, ph)) )
         return rc;
 
     char *pPageData;
 
-    if ((rc = GetData(pPageData)) != 0)
+    if ((rc = ph.GetData(pPageData))){
         pfHandle.UnpinPage(pageNum);
         return rc;
+    }
 
     // Target slot must already contain a record
     if (!IsSlotOccupied(pPageData, slotNum)) {
@@ -625,10 +845,11 @@ RC RM_FileHandle::UpdateRec(const RM_Record &rec){
     // Find the target slot.
     char *pSlotData;
 
-    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData)) != 0)
+    if ((rc = GetSlotPtr(pPageData, slotNum, pSlotData))){
         pfHandle.UnpinPage(pageNum);
         return rc;
-
+    }
+        
     // Replace existing rec contents
     // The RID and slot don't change
 
@@ -644,7 +865,7 @@ RC RM_FileHandle::UpdateRec(const RM_Record &rec){
 }
 
 
-RC RM_FileHandle::ForcePages(PageNum PageNum = ALL_PAGES){
+RC RM_FileHandle::ForcePages(PageNum pageNum){
     if (!bOpen)
         return RM_INVALIDFILE;
 
@@ -653,7 +874,7 @@ RC RM_FileHandle::ForcePages(PageNum PageNum = ALL_PAGES){
     // Header is maintained separately from PF dirty pages.
     // Make sure the cached RM header is written first.
     if(bHdrModified){
-        if ((rc = WriteHdr()) != 0){
+        if ((rc = WriteHdr()) ){
             return rc;
         }
     }
@@ -667,10 +888,6 @@ RC RM_FileHandle::ForcePages(PageNum PageNum = ALL_PAGES){
 }
 
 RC RM_FileHandle::ReadHdr(){ 
-    // open file but we expect it to already be opened
-    if(!bOpen)
-        return RM_INVALIDFILE;
-
     //getfirstpage (page 0) -> pinpage -> copy contents to filehandle -> unpin and maybe close
     PF_PageHandle ph;
     RC rc;
@@ -679,8 +896,7 @@ RC RM_FileHandle::ReadHdr(){
 
     char *pData;
    
-    if ((rc = ph.GetData(pData)) != 0){
-        pfHandle.UnpinPage(ph.GetPageNum);
+    if ((rc = ph.GetData(pData)) ){
         return rc;
     } // set pData 
 
@@ -702,24 +918,24 @@ RC RM_FileHandle::WriteHdr(){
     PF_PageHandle ph;
     RC rc;
 
-    if ((rc = pfHandle.GetThisPage(0, ph)) != 0)
+    if ((rc = pfHandle.GetThisPage(0, ph)) )
         return rc;
 
     char *pData;
 
-    if ((rc = ph.GetData(pData)) != 0) {
+    if ((rc = ph.GetData(pData)) ) {
         pfHandle.UnpinPage(0);
         return rc;
     }
 
     memcpy(pData, &hdr, sizeof(RM_FileHdr));
 
-    if ((rc = pfHandle.MarkDirty(0)) != 0) {
+    if ((rc = pfHandle.MarkDirty(0)) ) {
         pfHandle.UnpinPage(0);
         return rc;
     }
 
-    if ((rc = pfHandle.UnpinPage(0)) != 0)
+    if ((rc = pfHandle.UnpinPage(0)) )
         return rc;
 
     bHdrModified = false;

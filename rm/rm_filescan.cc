@@ -186,7 +186,7 @@ RC RM_FileScan::OpenScan(const RM_FileHandle &filehandle,
                          int attrOffset,
                          CompOp compOp,
                          void *value,
-                         ClientHint pinHint = NO_HINT)
+                         ClientHint pinHint)
 {
 
     // Scan cannot be opened twice.
@@ -354,6 +354,8 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
     if (fileHandle == nullptr)
         return RM_INVALIDSCAN;
 
+    RC rc;
+
 
     // Scan all data pages.
     //
@@ -361,16 +363,22 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
     while (currentPageNum <= fileHandle->hdr.numPages)
     {
         PF_PageHandle ph;
-        char *pPageData = nullptr;
+        char *pPageData;
 
-        RC rc = fileHandle->GetPageData(
+        if ((rc = fileHandle->GetPageData(
             currentPageNum,
             pPageData,
             ph
-        );
-
-        if (rc != 0)
+         ))){
+            // std::printf(
+            //     "GetNextRec: GetPageData failed "
+            //     "page=%d slot=%d rc=%d\n",
+            //     currentPageNum,
+            //     currentSlotNum,
+            //     rc
+            // );
             return rc;
+        }
 
 
         // Scan every slot on this page.
@@ -395,15 +403,14 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
 
 
             // Get pointer to the record.
-            char *pRecordData = nullptr;
+            char *pRecordData;
 
-            rc = fileHandle->GetSlotPtr(
+            if ((rc = fileHandle->GetSlotPtr(
                 pPageData,
                 slotNum,
                 pRecordData
-            );
-
-            if (rc != 0)
+            )
+          ))
             {
                 fileHandle->pfHandle.UnpinPage(
                     currentPageNum
@@ -453,11 +460,7 @@ RC RM_FileScan::GetNextRec(RM_Record &rec)
         //
         // Release the page before moving to the next one.
 
-        rc = fileHandle->pfHandle.UnpinPage(
-            currentPageNum
-        );
-
-        if (rc != 0)
+        if ((rc = fileHandle->pfHandle.UnpinPage(currentPageNum)))
             return rc;
 
 

@@ -22,11 +22,11 @@ RC RM_Manager::CreateFile(const char *fileName, int recordSize){
 
     if(!fileName)
         // return some error code
-        return RM_NULLPOINTER;
+        return RM_INVALIDFILE;
     
 
-    if (recordSize <= 0 || recordSize > PF_PAGE_SIZE - (int)sizeof(RM_FileHandle::RM_PageHdr) - 1)
-        return RM_INVALID_RECSIZE;
+    if (recordSize <= 0)
+        return RM_INVALIDRECORDSIZE;
 
     RC rc;
 
@@ -37,15 +37,18 @@ RC RM_Manager::CreateFile(const char *fileName, int recordSize){
     PF_FileHandle fh;
 
     // Open the file to write to the page header
-    if ((rc = pfm.OpenFile(fileName, fh)))
+    if ((rc = pfm.OpenFile(fileName, fh))){
+        pfm.DestroyFile(fileName);
         return rc;
-    
+    }
+
     PF_PageHandle ph;
 
     // Allocate the header page (page 0)
-    if ((rc = fh.AllocatePage(ph)))
+    if ((rc = fh.AllocatePage(ph))){
         pfm.CloseFile(fh);
         return rc;
+    }
 
     char *pData;
 
@@ -66,25 +69,33 @@ RC RM_Manager::CreateFile(const char *fileName, int recordSize){
         return rc;
     }
 
-    // Fill the header structure
-    RM_FileHandle::RM_FileHdr hdr;
-    hdr.recordSize = recordSize;
-
+    
     int maxSlots, bitmapSize, dataOffset;
+
     ComputePageLayout(recordSize, maxSlots, bitmapSize, dataOffset);
+    
+    if (maxSlots <= 0)
+        return RM_INVALIDRECORDSIZE;
+
+     // Fill the header structure
+    RM_FileHandle::RM_FileHdr hdr;
+
+    hdr.recordSize = recordSize;
     hdr.numRecordsPerPage = maxSlots;
     hdr.bitmapSize = bitmapSize;
     hdr.pageDataOffset = dataOffset;
     hdr.numPages = 1;   // only header page so far;
     hdr.firstFreePage = -1; // no data pages yet
 
-    memcpy(pData, &hdr, sizeof(hdr));  // set the pagehanldes's pData to the file contents of page 0
+    memcpy(pData, &hdr, sizeof(hdr));  // set the pagehandles's pData to the file contents of page 0
 
     if ((rc = fh.MarkDirty(pageNum))) { 
         fh.UnpinPage(pageNum); 
         pfm.CloseFile(fh); 
         return rc; 
     }
+
+    // Release page 0 from the buffer pool
     if ((rc = fh.UnpinPage(pageNum))) { 
         pfm.CloseFile(fh); 
         return rc; }
@@ -105,10 +116,10 @@ RC RM_Manager::CreateFile(const char *fileName, int recordSize){
 RC RM_Manager::OpenFile(const char *fileName, RM_FileHandle &fileHandle){
     
     if (!fileName)
-        return RM_NULLPOINTER;
+        return RM_INVALIDFILE;
 
     if (fileHandle.bOpen)
-        return RM_INVALID_FILEHANDLE; // already open and is associated with another file
+        return RM_INVALIDFILE; // already open and is associated with another file
 
     RC rc;
     
@@ -139,7 +150,7 @@ RC RM_Manager::OpenFile(const char *fileName, RM_FileHandle &fileHandle){
 RC RM_Manager::CloseFile(RM_FileHandle &fileHandle){
     
     if(!fileHandle.bOpen)
-        return RM_INVALID_FILEHANDLE;
+        return RM_INVALIDFILE;
 
     RC rc;
     
@@ -165,7 +176,7 @@ RC RM_Manager::CloseFile(RM_FileHandle &fileHandle){
 
 RC RM_Manager::DestroyFile(const char *fileName){
      if (!fileName)
-        return RM_NULLPOINTER;
+        return RM_INVALIDFILE;
 
     return pfm.DestroyFile(fileName);
 
@@ -181,33 +192,40 @@ RC RM_Manager::DestroyFile(const char *fileName){
 * We solve iteratively
 */
 
-static void ComputePageLayout(int recordSize, int &numRecordsPerPage,
-                                int &bitmapSize, int &pageDataOffset)
-
+void RM_Manager::ComputePageLayout(int recordSize,
+                              int &numRecordsPerPage,
+                              int &bitmapSize,
+                              int &pageDataOffset)
 {
-    int availableSpace = PF_PAGE_SIZE;
-    int maxSlots = (availableSpace - (int)sizeof(RM_FileHandle::RM_PageHdr) * 8) / (recordSize * 8 + 1);
+    if (recordSize <= 0) {
+        numRecordsPerPage = 0;
+        bitmapSize = 0;
+        pageDataOffset = sizeof(RM_FileHandle::RM_PageHdr);
+        return;
+    }
 
-    if (maxSlots < 1)
-        maxSlots = 1;
-     
-    int bitmapSize = static_cast<int>(std::ceil(maxSlots / 8.0));
+    const int headerSize =
+        static_cast<int>(sizeof(RM_FileHandle::RM_PageHdr));
 
-    // we iterate because of the circular dependence
-    // between bitmapSize and the number of records to be stored
+    // Start with the maximum number of records ignoring the bitmap.
+    int maxSlots = (PF_PAGE_SIZE - headerSize) / recordSize;
 
-    while(true) {
-        int _bitmapSize = (maxSlots + 7) / 8; // from the definition that ceil[a/b]= (a + b - 1)/b
-        int totalSize = (int)sizeof(RM_FileHandle::RM_PageHdr) + _bitmapSize + maxSlots * recordSize;
-        if (totalSize <= PF_PAGE_SIZE) break;
-        maxSlots--;
-        if (maxSlots <= 0 ){
-            maxSlots = 0;
+    // Account for the bitmap's own size.
+    while (maxSlots > 0) {
+        const int currentBitmapSize = (maxSlots + 7) / 8;
+
+        const int totalSize =
+            headerSize +
+            currentBitmapSize +
+            maxSlots * recordSize;
+
+        if (totalSize <= PF_PAGE_SIZE)
             break;
-        }
+
+        --maxSlots;
     }
 
     numRecordsPerPage = maxSlots;
     bitmapSize = (maxSlots + 7) / 8;
-    pageDataOffset = (int)sizeof(RM_FileHandle::RM_PageHdr) + bitmapSize;
-}   
+    pageDataOffset = headerSize + bitmapSize;
+} 

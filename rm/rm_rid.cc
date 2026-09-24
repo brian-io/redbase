@@ -38,14 +38,18 @@ RID& RID::operator=(const RID &rid) {
 
 // Return the page number of a record
 RC RID::GetPageNum(PageNum &page) const {
-    if (!valid) return RM_RID_INVALID;
+    if (!valid) 
+        return RM_INVALIDRID;
+
     page = pageNum;
     return 0;
 }
 
 // Return the slot number of a record in a page
-RC RID::GetSlotNum(PageNum &slot) const {
-    if (!valid) return RM_RID_INVALID;
+RC RID::GetSlotNum(SlotNum &slot) const {
+    if (!valid) 
+        return RM_INVALIDRID;
+
     slot = slotNum;
     return 0;
 }

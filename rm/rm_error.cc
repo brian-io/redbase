@@ -4,48 +4,74 @@
 //
 
 #include <cerrno>
-#include <cstdio>
+#include <cstring>
 #include <iostream>
+
 #include "rm_internal.h"
 
 using namespace std;
 
-//
-// Error table
-//
-static char *RM_WarnMsg[] = {
- 
-};
-
-static char *RM_ErrorMsg[] = {
-  
-};
-
-//
-// RM_PrintError
-//
-// Desc: Send a message corresponding to a RM return code to cerr
-//       Assumes RM_UNIX is last valid RM return code
-// In:   rc - return code for which a message is desired
-//
 void RM_PrintError(RC rc)
 {
-  // Check the return code is within proper limits
-  if (rc >= START_RM_WARN && rc <= RM_LASTWARN)
-    // Print warning
-    cerr << "RM warning: " << RM_WarnMsg[rc - START_RM_WARN] << "\n";
-  // Error codes are negative, so invert everything
-  else if (-rc >= -START_RM_ERR && -rc < -RM_LASTERROR)
-    // Print error
-    cerr << "RM error: " << RM_ErrorMsg[-rc + START_RM_ERR] << "\n";
-  else if (rc == RM_UNIX)
-#ifdef PC
-      cerr << "OS error\n";
-#else
-      cerr << strerror(errno) << "\n";
-#endif
-  else if (rc == 0)
-    cerr << "RM_PrintError called with return code of 0\n";
-  else
-    cerr << "RM error: " << rc << " is out of bounds\n";
+    switch (rc) {
+        case RM_EOF:
+            cerr << "RM warning: end of file\n";
+            break;
+
+        case RM_INVALIDRID:
+            cerr << "RM error: invalid RID\n";
+            break;
+
+        case RM_RECORDNOTFOUND:
+            cerr << "RM error: record not found\n";
+            break;
+
+        case RM_INVALIDRECORD:
+            cerr << "RM error: invalid record\n";
+            break;
+
+        case RM_INVALIDFILE:
+            cerr << "RM error: file handle is not open\n";
+            break;
+
+        case RM_INVALIDSCAN:
+            cerr << "RM error: scan is not open\n";
+            break;
+
+        case RM_RECORDSIZETOOLARGE:
+            cerr << "RM error: record size is too large\n";
+            break;
+
+        case RM_INVALIDRECORDSIZE:
+            cerr << "RM error: invalid record size\n";
+            break;
+
+        case RM_INVALIDATTR:
+            cerr << "RM error: invalid attribute\n";
+            break;
+
+        case RM_SCANOPEN:
+            cerr << "RM error: scan is already open\n";
+            break;
+
+        case RM_NOMEM:
+            cerr << "RM error: memory allocation failure\n";
+            break;
+
+        case RM_PAGECORRUPT:
+            cerr << "RM error: page data is corrupted\n";
+            break;
+
+        case RM_UNEXPECTEDRC:
+            cerr << "RM error: unexpected PF return code\n";
+            break;
+
+        case 0:
+            cerr << "RM_PrintError called with return code of 0\n";
+            break;
+
+        default:
+            cerr << "RM error: " << rc << " is out of bounds\n";
+            break;
+    }
 }

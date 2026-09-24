@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <unistd.h>
 #include <iostream>
+#include <cstdint>
 #include "pf_buffermgr.h"
 
 using namespace std;
@@ -951,7 +952,7 @@ RC PF_BufferMgr::AllocateBlock(char *&buffer)
       return rc;
 
    // Create artificial page number (just needs to be unique for hash table)
-   PageNum pageNum = PageNum(bufTable[slot].pData);
+   PageNum pageNum = static_cast<PageNum>(slot);   // was PageNum(bufTable[slot].pData)
 
    // Insert the page into the hash table, and initialize the page description entry
    if ((rc = hashTable.Insert(MEMORY_FD, pageNum, slot) != OK_RC) ||
@@ -974,7 +975,12 @@ RC PF_BufferMgr::AllocateBlock(char *&buffer)
 //
 // Free the block of memory from the buffer pool.
 //
-RC PF_BufferMgr::DisposeBlock(char* buffer)
+RC PF_BufferMgr::DisposeBlock(char *buffer)
 {
-   return UnpinPage(MEMORY_FD, PageNum(buffer));
+   for (int slot = 0; slot < numPages; slot++) {
+      if (bufTable[slot].pData == buffer &&
+          bufTable[slot].fd == MEMORY_FD)
+         return UnpinPage(MEMORY_FD, bufTable[slot].pageNum);
+   }
+   return PF_PAGENOTINBUF;   // or whichever error code your PF layer uses
 }
